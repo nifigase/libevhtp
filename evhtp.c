@@ -4259,6 +4259,72 @@ evhtp_connection_ssl_new(evbase_t * evbase, const char * addr, uint16_t port, ev
     return conn;
 }
 
+evhtp_connection_t *
+evhtp_connection_ssl_new_dns(evbase_t * evbase, struct evdns_base * dns_base,
+                         const char * addr, uint16_t port, evhtp_ssl_ctx_t * ctx) {
+    evhtp_connection_t * conn;
+    int                  err;
+
+    evhtp_assert(evbase != NULL);
+
+    if (!(conn = _evhtp_connection_new(NULL, -1, evhtp_type_client))) {
+        return NULL;
+    }
+
+    conn->ssl           = SSL_new(ctx);
+    conn->evbase        = evbase;
+    conn->bev           = bufferevent_openssl_socket_new(evbase, -1, conn->ssl,
+                                         BUFFEREVENT_SSL_CONNECTING, BEV_OPT_CLOSE_ON_FREE);
+
+    if (conn->bev == NULL) {
+        evhtp_connection_free(conn);
+
+        return NULL;
+    }
+
+    bufferevent_enable(conn->bev, EV_READ);
+    bufferevent_setcb(conn->bev, NULL, NULL,
+                      _evhtp_connection_eventcb, conn);
+
+    if (dns_base != NULL) {
+        err = bufferevent_socket_connect_hostname(conn->bev, dns_base,
+                                                  AF_UNSPEC, addr, port);
+    } else {
+        struct sockaddr_in  sin4;
+        struct sockaddr_in6 sin6;
+        struct sockaddr   * sin;
+        int                 salen;
+
+        if (inet_pton(AF_INET, addr, &sin4.sin_addr)) {
+            sin4.sin_family = AF_INET;
+            sin4.sin_port   = htons(port);
+            sin = (struct sockaddr *)&sin4;
+            salen           = sizeof(sin4);
+        } else if (inet_pton(AF_INET6, addr, &sin6.sin6_addr)) {
+            sin6.sin6_family = AF_INET6;
+            sin6.sin6_port   = htons(port);
+            sin = (struct sockaddr *)&sin6;
+            salen = sizeof(sin6);
+        } else {
+            /* Not a valid IP. */
+            evhtp_connection_free(conn);
+
+            return NULL;
+        }
+
+        err = bufferevent_socket_connect(conn->bev, sin, salen);
+    }
+
+    /* not needed since any of the bufferevent errors will go straight to
+     * the eventcb
+     */
+    if (err) {
+        return NULL;
+    }
+
+    return conn;
+} /* evhtp_connection_ssl_new_dns */
+
 #endif
 
 
