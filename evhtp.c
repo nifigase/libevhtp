@@ -4158,6 +4158,40 @@ evhtp_connection_set_rate_limit(evhtp_connection_t * conn,
 * client request functions                                      *
 *****************************************************************/
 
+static int
+_evhtp_connection_connect(evhtp_connection_t * conn, struct evdns_base * dns_base,
+  const char * addr, uint16_t port)
+{
+    int err;
+    if (dns_base != NULL) {
+        err = bufferevent_socket_connect_hostname(conn->bev, dns_base,
+                                                  AF_UNSPEC, addr, port);
+    } else {
+        struct sockaddr_in  sin4;
+        struct sockaddr_in6 sin6;
+        struct sockaddr   * sin;
+        int                 salen;
+
+        if (inet_pton(AF_INET, addr, &sin4.sin_addr)) {
+            sin4.sin_family = AF_INET;
+            sin4.sin_port   = htons(port);
+            sin = (struct sockaddr *)&sin4;
+            salen           = sizeof(sin4);
+        } else if (inet_pton(AF_INET6, addr, &sin6.sin6_addr)) {
+            sin6.sin6_family = AF_INET6;
+            sin6.sin6_port   = htons(port);
+            sin = (struct sockaddr *)&sin6;
+            salen = sizeof(sin6);
+        } else {
+            /* Not a valid IP. */
+            return 1;
+        }
+
+        err = bufferevent_socket_connect(conn->bev, sin, salen);
+    }
+    return err;
+}
+
 evhtp_connection_t *
 evhtp_connection_new(evbase_t * evbase, const char * addr, uint16_t port) {
     return evhtp_connection_new_dns(evbase, NULL, addr, port);
@@ -4188,39 +4222,13 @@ evhtp_connection_new_dns(evbase_t * evbase, struct evdns_base * dns_base,
     bufferevent_setcb(conn->bev, NULL, NULL,
                       _evhtp_connection_eventcb, conn);
 
-    if (dns_base != NULL) {
-        err = bufferevent_socket_connect_hostname(conn->bev, dns_base,
-                                                  AF_UNSPEC, addr, port);
-    } else {
-        struct sockaddr_in  sin4;
-        struct sockaddr_in6 sin6;
-        struct sockaddr   * sin;
-        int                 salen;
-
-        if (inet_pton(AF_INET, addr, &sin4.sin_addr)) {
-            sin4.sin_family = AF_INET;
-            sin4.sin_port   = htons(port);
-            sin = (struct sockaddr *)&sin4;
-            salen           = sizeof(sin4);
-        } else if (inet_pton(AF_INET6, addr, &sin6.sin6_addr)) {
-            sin6.sin6_family = AF_INET6;
-            sin6.sin6_port   = htons(port);
-            sin = (struct sockaddr *)&sin6;
-            salen = sizeof(sin6);
-        } else {
-            /* Not a valid IP. */
-            evhtp_connection_free(conn);
-
-            return NULL;
-        }
-
-        err = bufferevent_socket_connect(conn->bev, sin, salen);
-    }
+    err = _evhtp_connection_connect(conn, dns_base, addr, port);
 
     /* not needed since any of the bufferevent errors will go straight to
      * the eventcb
      */
     if (err) {
+        evhtp_connection_free(conn);
         return NULL;
     }
 
@@ -4230,33 +4238,7 @@ evhtp_connection_new_dns(evbase_t * evbase, struct evdns_base * dns_base,
 #ifndef EVHTP_DISABLE_SSL
 evhtp_connection_t *
 evhtp_connection_ssl_new(evbase_t * evbase, const char * addr, uint16_t port, evhtp_ssl_ctx_t * ctx) {
-    evhtp_connection_t * conn;
-    struct sockaddr_in   sin;
-
-    evhtp_assert(evbase != NULL);
-
-    if (!(conn = _evhtp_connection_new(NULL, -1, evhtp_type_client))) {
-        return NULL;
-    }
-
-    sin.sin_family      = AF_INET;
-    sin.sin_addr.s_addr = inet_addr(addr);
-    sin.sin_port        = htons(port);
-
-    conn->ssl           = SSL_new(ctx);
-    conn->evbase        = evbase;
-    conn->bev           = bufferevent_openssl_socket_new(evbase, -1, conn->ssl,
-                                                         BUFFEREVENT_SSL_CONNECTING, BEV_OPT_CLOSE_ON_FREE);
-
-    bufferevent_enable(conn->bev, EV_READ);
-    bufferevent_setcb(conn->bev, NULL, NULL,
-                      _evhtp_connection_eventcb, conn);
-
-    bufferevent_socket_connect(conn->bev,
-                               (struct sockaddr *)&sin, sizeof(sin));
-
-
-    return conn;
+    return evhtp_connection_ssl_new_dns(evbase, NULL, addr, port, ctx);
 }
 
 evhtp_connection_t *
@@ -4286,39 +4268,13 @@ evhtp_connection_ssl_new_dns(evbase_t * evbase, struct evdns_base * dns_base,
     bufferevent_setcb(conn->bev, NULL, NULL,
                       _evhtp_connection_eventcb, conn);
 
-    if (dns_base != NULL) {
-        err = bufferevent_socket_connect_hostname(conn->bev, dns_base,
-                                                  AF_UNSPEC, addr, port);
-    } else {
-        struct sockaddr_in  sin4;
-        struct sockaddr_in6 sin6;
-        struct sockaddr   * sin;
-        int                 salen;
-
-        if (inet_pton(AF_INET, addr, &sin4.sin_addr)) {
-            sin4.sin_family = AF_INET;
-            sin4.sin_port   = htons(port);
-            sin = (struct sockaddr *)&sin4;
-            salen           = sizeof(sin4);
-        } else if (inet_pton(AF_INET6, addr, &sin6.sin6_addr)) {
-            sin6.sin6_family = AF_INET6;
-            sin6.sin6_port   = htons(port);
-            sin = (struct sockaddr *)&sin6;
-            salen = sizeof(sin6);
-        } else {
-            /* Not a valid IP. */
-            evhtp_connection_free(conn);
-
-            return NULL;
-        }
-
-        err = bufferevent_socket_connect(conn->bev, sin, salen);
-    }
+    err = _evhtp_connection_connect(conn, dns_base, addr, port);
 
     /* not needed since any of the bufferevent errors will go straight to
      * the eventcb
      */
     if (err) {
+        evhtp_connection_free(conn);
         return NULL;
     }
 
